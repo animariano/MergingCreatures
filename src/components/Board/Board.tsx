@@ -1,11 +1,10 @@
 import "./Board.css";
 import Card from "../Card/Card";
-import { createDeck } from "../../services/DeckService";
-import type { CardModel } from "../../types/Card";
+import { useGame } from "../../hooks/useGame";
 
 
 function Board() {
-  const deck: CardModel[] = createDeck();
+  const game = useGame();
   return (
     <div className="board">
 
@@ -29,7 +28,7 @@ function Board() {
         </div>
 
 <div className="hand">
-  {deck.map((carta) => (
+  {game.player.mano.map((carta) => (
     <Card
       key={carta.id}
       nombre={carta.nombre}
