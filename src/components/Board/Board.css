@@ -1,0 +1,57 @@
+.board {
+    width: 100%;
+    height: 100vh;
+
+    display: flex;
+    flex-direction: column;
+
+    background: #21532b;
+}
+
+.player-area {
+    flex: 1;
+
+    display: flex;
+    flex-direction: column;
+
+    padding: 20px;
+}
+
+.player-info {
+    font-size: 24px;
+    font-weight: bold;
+}
+
+.hand {
+    margin-top: 15px;
+    min-height: 120px;
+
+    border: 2px dashed white;
+
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+
+    gap: 15px;
+    padding: 10px;
+}
+
+.field {
+    margin-top: 15px;
+
+    flex: 1;
+
+    border: 2px solid white;
+
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+
+.end-turn {
+    height: 60px;
+
+    font-size: 20px;
+
+    cursor: pointer;
+}
