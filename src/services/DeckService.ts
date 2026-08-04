@@ -1,31 +1,44 @@
-import { cards } from "../data/cards";
-import type { CardModel } from "../types/Card";
+import { demoDeckList } from "../data/deckList";
+import type { CardInstance } from "../types/CardInstance";
 
-export function createDeck(): CardModel[] {
-  return [...cards];
+function generarId(): string {
+  // crypto.randomUUID existe en todos los navegadores modernos; evitamos depender de libs externas.
+  return crypto.randomUUID();
 }
 
-export function shuffleDeck(deck: CardModel[]): CardModel[] {
-  const shuffled = [...deck];
+function crearInstancia(defId: string): CardInstance {
+  return {
+    instanceId: generarId(),
+    defId,
+    zona: "mazo",
+    danio: 0,
+    turnoEnCampo: null,
+    atacoEsteTurno: false,
+    buffs: [],
+    equipos: [],
+  };
+}
 
-  for (let i = shuffled.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
+/** Crea el mazo completo (todas las copias) como instancias nuevas, sin mezclar. */
+export function crearMazo(): CardInstance[] {
+  const mazo: CardInstance[] = [];
 
-    [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+  for (const { defId, cantidad } of demoDeckList) {
+    for (let i = 0; i < cantidad; i++) {
+      mazo.push(crearInstancia(defId));
+    }
   }
 
-  return shuffled;
+  return mazo;
 }
 
-export function drawCards(
-  deck: CardModel[],
-  amount: number
-): {
-  hand: CardModel[];
-  deck: CardModel[];
-} {
-  return {
-    hand: deck.slice(0, amount),
-    deck: deck.slice(amount),
-  };
+export function mezclar<T>(lista: T[]): T[] {
+  const copia = [...lista];
+
+  for (let i = copia.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [copia[i], copia[j]] = [copia[j], copia[i]];
+  }
+
+  return copia;
 }

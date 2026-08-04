@@ -1,9 +1,9 @@
-import type { CardModel } from "./Card";
+export type PlayerId = "player" | "enemy";
 
 export interface Player {
   vida: number;
-  mazo: CardModel[];
-  mano: CardModel[];
-  campo: CardModel[];
-  descarte: CardModel[];
+  mazo: string[];
+  mano: string[];
+  campo: string[];
+  tumba: string[];
 }
