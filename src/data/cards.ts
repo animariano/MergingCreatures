@@ -11,6 +11,7 @@ export const cardDefinitions: CardDefinition[] = [
     ataque: 1,
     vida: 4,
     esFusion: false,
+    image: "/cards/criaturas/tortuga.jpg",
   },
   {
     id: "aguila",
@@ -21,6 +22,7 @@ export const cardDefinitions: CardDefinition[] = [
     ataque: 2,
     vida: 2,
     puedeAtacarAlEntrar: true,
+    image: "/cards/criaturas/aguila.jpg",
     esFusion: false,
   },
   {
@@ -31,6 +33,7 @@ export const cardDefinitions: CardDefinition[] = [
     nivel: 1,
     ataque: 2,
     vida: 3,
+    image: "/cards/criaturas/cactus.jpg",
     noPuedeAtacar: true,
     esFusion: false,
   },
@@ -43,6 +46,7 @@ export const cardDefinitions: CardDefinition[] = [
     ataque: 1,
     vida: 2,
     noPuedeSerBloqueado: true,
+    image: "/cards/criaturas/topo.jpg",
     esFusion: false,
   },
   {
@@ -54,6 +58,7 @@ export const cardDefinitions: CardDefinition[] = [
     ataque: 3,
     vida: 1,
     puedeAtacarAlEntrar: true,
+    image: "/cards/criaturas/colibri.jpg",
     esFusion: false,
   },
   {
@@ -64,6 +69,7 @@ export const cardDefinitions: CardDefinition[] = [
     nivel: 1,
     ataque: 3,
     vida: 3,
+    image: "/cards/criaturas/leon.jpg",
     esFusion: false,
   },
   {
@@ -74,6 +80,7 @@ export const cardDefinitions: CardDefinition[] = [
     nivel: 1,
     ataque: 2,
     vida: 1,
+    image: "/cards/criaturas/conejo_fuego.jpg",
     esFusion: false,
   },
 
@@ -86,6 +93,7 @@ export const cardDefinitions: CardDefinition[] = [
     nivel: 2,
     ataque: 3,
     vida: 6,
+    image: "/cards/criaturas/caparazor.jpg",
     esFusion: true,
   },
   {
@@ -96,6 +104,7 @@ export const cardDefinitions: CardDefinition[] = [
     nivel: 2,
     ataque: 6,
     vida: 6,
+    image: "/cards/criaturas/ignileon.jpg",
     efectoTexto:
       "Al ser bloqueado, inflige daño al oponente igual a la diferencia entre su ataque y la vida de la criatura bloqueadora.",
     esFusion: true,

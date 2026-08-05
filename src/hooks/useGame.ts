@@ -1,14 +1,31 @@
-import { useReducer } from "react";
+import { useEffect, useReducer } from "react";
 
-import { crearMazo, mezclar } from "../services/DeckService";
+import { crearMazo, mezclar, generarId } from "../services/DeckService";
+import { getDefinition } from "../data/cards";
+import { fusionDefinitions } from "../data/fusions";
 
-import type { GameState } from "../types/GameState";
-import type { CardInstance } from "../types/CardInstance";
+import type { Fase, GameState } from "../types/GameState";
+import type { CardInstance, Zona } from "../types/CardInstance";
 import type { Player, PlayerId } from "../types/Player";
+import type { CreatureDefinition } from "../types/CardDefinition";
+import type { FusionDefinition } from "../types/FusionDefinition";
 
 const CARTAS_MANO_INICIAL = 5;
 
-type Accion = { type: "TERMINAR_TURNO" };
+/** Orden fijo de fases dentro de un turno, tal como las describe el PDF de reglas. */
+const ORDEN_FASES: Fase[] = ["inicio", "robo", "principal", "pelea", "secundaria", "fin"];
+
+/** Fases en las que se puede invocar una criatura o hacer una fusión. */
+const FASES_DE_ACCION: Fase[] = ["principal", "secundaria"];
+
+type Accion =
+  | { type: "AVANZAR_FASE" }
+  | { type: "INVOCAR_CRIATURA"; instanceId: string }
+  | { type: "DECLARAR_ATACANTE"; instanceId: string }
+  | { type: "CONFIRMAR_ATAQUE" }
+  | { type: "FUSIONAR"; instanceIdA: string; instanceIdB: string }
+  | { type: "JUGAR_MAGIA"; instanceId: string; objetivoId: string }
+  | { type: "EQUIPAR"; instanceId: string; objetivoId: string };
 
 function armarJugadorInicial(cartas: Record<string, CardInstance>): Player {
   const mazoMezclado = mezclar(crearMazo());
@@ -40,55 +57,569 @@ function crearEstadoInicial(): GameState {
   return {
     turno: 1,
     jugadorActivo: "player",
-    fase: "principal",
+    fase: "inicio",
     cartas,
     player,
     enemy,
     invocoCriaturaEsteTurno: false,
     fusionoEsteTurno: false,
+    atacantesDeclarados: [],
+  };
+}
+
+function listaDeZona(jugador: Player, zona: Zona): string[] {
+  switch (zona) {
+    case "mazo":
+      return jugador.mazo;
+    case "mano":
+      return jugador.mano;
+    case "campo":
+      return jugador.campo;
+    case "tumba":
+      return jugador.tumba;
+  }
+}
+
+/** Mueve una carta de la zona en la que está a otra zona, dentro del mismo jugador.
+ *  Punto único donde se mantienen sincronizados `cartas[id].zona` y las listas de `Player`. */
+function moverEntreZonas(state: GameState, jugador: PlayerId, instanceId: string, destino: Zona): GameState {
+  const jugadorState = state[jugador];
+  const origen = state.cartas[instanceId].zona;
+
+  const sinCartaEnOrigen: Player = {
+    ...jugadorState,
+    [origen]: listaDeZona(jugadorState, origen).filter((id) => id !== instanceId),
+  };
+
+  const conCartaEnDestino: Player = {
+    ...sinCartaEnOrigen,
+    [destino]: [...listaDeZona(sinCartaEnOrigen, destino), instanceId],
+  };
+
+  return {
+    ...state,
+    [jugador]: conCartaEnDestino,
+    cartas: {
+      ...state.cartas,
+      [instanceId]: { ...state.cartas[instanceId], zona: destino },
+    },
   };
 }
 
 /** Mueve la carta de arriba del mazo del jugador indicado a su mano. Si no hay mazo, no hace nada (regla de fatiga: pendiente). */
 function robarCarta(state: GameState, jugador: PlayerId): GameState {
-  const jugadorState = state[jugador];
-
-  if (jugadorState.mazo.length === 0) {
+  if (state[jugador].mazo.length === 0) {
     return state;
   }
 
-  const [proximaId, ...restoMazo] = jugadorState.mazo;
+  const proximaId = state[jugador].mazo[0];
+
+  return moverEntreZonas(state, jugador, proximaId, "mano");
+}
+
+function robarCartaDeFase(state: GameState): GameState {
+  const esPrimerTurnoDelJugadorInicial = state.turno === 1 && state.jugadorActivo === "player";
+
+  if (esPrimerTurnoDelJugadorInicial) {
+    return state;
+  }
+
+  return robarCarta(state, state.jugadorActivo);
+}
+
+/** Al empezar el turno, las criaturas del jugador activo vuelven a poder atacar. */
+function resetearAtaquesDeCriaturas(state: GameState): GameState {
+  const idsCampo = state[state.jugadorActivo].campo;
+  const cartasActualizadas = { ...state.cartas };
+
+  for (const id of idsCampo) {
+    cartasActualizadas[id] = { ...cartasActualizadas[id], atacoEsteTurno: false };
+  }
+
+  return { ...state, cartas: cartasActualizadas };
+}
+
+/** Efectos automáticos al entrar a una fase. "fin" queda como gancho para cuando existan
+ *  efectos de cartas tipo "al final del turno, hace x". */
+function aplicarEfectosDeFase(state: GameState, fase: Fase): GameState {
+  if (fase === "robo") return robarCartaDeFase(state);
+  if (fase === "inicio") return resetearAtaquesDeCriaturas(state);
+  return state;
+}
+
+function avanzarFase(state: GameState): GameState {
+  const indiceActual = ORDEN_FASES.indexOf(state.fase);
+  const esFinDeTurno = indiceActual === ORDEN_FASES.length - 1;
+
+  if (esFinDeTurno) {
+    const siguienteJugador: PlayerId = state.jugadorActivo === "player" ? "enemy" : "player";
+
+    return {
+      ...state,
+      jugadorActivo: siguienteJugador,
+      turno: state.turno + 1,
+      fase: "inicio",
+      invocoCriaturaEsteTurno: false,
+      fusionoEsteTurno: false,
+      atacantesDeclarados: [],
+    };
+  }
+
+  const siguienteFase = ORDEN_FASES[indiceActual + 1];
+  const estadoConFaseNueva: GameState = { ...state, fase: siguienteFase };
+
+  return aplicarEfectosDeFase(estadoConFaseNueva, siguienteFase);
+}
+
+function invocarCriatura(state: GameState, instanceId: string): GameState {
+  const jugador = state.jugadorActivo;
+
+  if (!FASES_DE_ACCION.includes(state.fase)) return state;
+  if (state.invocoCriaturaEsteTurno) return state;
+  if (!state[jugador].mano.includes(instanceId)) return state;
+
+  const definicion = getDefinition(state.cartas[instanceId].defId);
+  if (definicion.categoria !== "criatura") return state;
+
+  const estadoConCartaEnCampo = moverEntreZonas(state, jugador, instanceId, "campo");
+
+  return {
+    ...estadoConCartaEnCampo,
+    invocoCriaturaEsteTurno: true,
+    cartas: {
+      ...estadoConCartaEnCampo.cartas,
+      [instanceId]: {
+        ...estadoConCartaEnCampo.cartas[instanceId],
+        turnoEnCampo: state.turno,
+        atacoEsteTurno: false,
+      },
+    },
+  };
+}
+
+/** Equipos cuyo efecto es impedir atacar (hoy solo Soga; agregar acá si sumás otros). */
+const EQUIPOS_QUE_IMPIDEN_ATACAR = ["soga"];
+
+function tieneEquipoQueImpideAtacar(state: GameState, instancia: CardInstance): boolean {
+  return instancia.equipos.some((equipoId) =>
+    EQUIPOS_QUE_IMPIDEN_ATACAR.includes(state.cartas[equipoId]?.defId)
+  );
+}
+
+/** ¿Esta criatura puede sumarse como atacante ahora mismo? No cubre bloqueo (todavía no existe
+ *  quién decida bloquear del otro lado: eso llega con la IA). */
+function puedeAtacar(state: GameState, instanceId: string): boolean {
+  const instancia = state.cartas[instanceId];
+  const def = getDefinition(instancia.defId);
+
+  if (def.categoria !== "criatura") return false;
+  if (def.noPuedeAtacar) return false;
+  if (instancia.atacoEsteTurno) return false;
+  if (tieneEquipoQueImpideAtacar(state, instancia)) return false;
+
+  const entroEsteTurno = instancia.turnoEnCampo === state.turno;
+  if (entroEsteTurno && !def.puedeAtacarAlEntrar) return false;
+
+  return true;
+}
+
+/** Ataque/vida actuales de una criatura (base + buffs, y en el caso de vida, menos el daño
+ *  acumulado). Centralizado acá porque tanto el combate como (eventualmente) el resto del
+ *  motor lo necesitan; la UI hace el mismo cálculo por su cuenta para no acoplar render con reducer. */
+function ataqueActualDe(state: GameState, instanceId: string): number {
+  const instancia = state.cartas[instanceId];
+  const def = getDefinition(instancia.defId);
+  if (def.categoria !== "criatura") return 0;
+
+  const buffAtaque = instancia.buffs.reduce((suma, b) => suma + b.ataque, 0);
+  return def.ataque + buffAtaque;
+}
+
+function vidaActualDe(state: GameState, instanceId: string): number {
+  const instancia = state.cartas[instanceId];
+  const def = getDefinition(instancia.defId);
+  if (def.categoria !== "criatura") return 0;
+
+  const buffVida = instancia.buffs.reduce((suma, b) => suma + b.vida, 0);
+  return def.vida + buffVida - instancia.danio;
+}
+
+function puedeBloquear(state: GameState, instanceId: string): boolean {
+  const instancia = state.cartas[instanceId];
+  const def = getDefinition(instancia.defId);
+  if (def.categoria !== "criatura") return false;
+  if (tieneEquipoQueImpideAtacar(state, instancia)) return false; // Soga: "no puede atacar o bloquear"
+
+  return true;
+}
+
+/**
+ * Heurística de bloqueo (la usan tanto la IA defendiendo como, por ahora, el jugador cuando
+ * lo ataca la IA — todavía no hay UI para que un humano elija bloqueadores a mano, así que
+ * ambos lados usan la misma lógica automática hasta que se construya esa pantalla). Bloquea
+ * a los atacantes más fuertes primero, con la primera criatura disponible que pueda bloquear;
+ * respeta que Topo no puede ser bloqueado.
+ */
+function decidirBloqueos(state: GameState, atacantesIds: string[], defensor: PlayerId): Record<string, string> {
+  const disponibles = state[defensor].campo.filter((id) => puedeBloquear(state, id));
+  const atacantesOrdenados = [...atacantesIds].sort(
+    (a, b) => ataqueActualDe(state, b) - ataqueActualDe(state, a)
+  );
+
+  const bloqueos: Record<string, string> = {};
+
+  for (const atacanteId of atacantesOrdenados) {
+    const defAtacante = getDefinition(state.cartas[atacanteId].defId);
+    if (defAtacante.categoria === "criatura" && defAtacante.noPuedeSerBloqueado) continue;
+    if (disponibles.length === 0) break;
+
+    bloqueos[atacanteId] = disponibles.shift()!;
+  }
+
+  return bloqueos;
+}
+
+/** Manda a la tumba cualquier criatura del campo de `jugador` cuya vida actual haya llegado a 0. */
+function aplicarMuertes(state: GameState, jugador: PlayerId): GameState {
+  let estado = state;
+
+  for (const id of [...estado[jugador].campo]) {
+    if (vidaActualDe(estado, id) <= 0) {
+      estado = moverEntreZonas(estado, jugador, id, "tumba");
+    }
+  }
+
+  return estado;
+}
+
+function alternarAtacante(state: GameState, instanceId: string): GameState {
+  if (state.fase !== "pelea") return state;
+
+  const jugador = state.jugadorActivo;
+  if (!state[jugador].campo.includes(instanceId)) return state;
+
+  const yaDeclarado = state.atacantesDeclarados.includes(instanceId);
+
+  if (yaDeclarado) {
+    return {
+      ...state,
+      atacantesDeclarados: state.atacantesDeclarados.filter((id) => id !== instanceId),
+    };
+  }
+
+  if (!puedeAtacar(state, instanceId)) return state;
+
+  return { ...state, atacantesDeclarados: [...state.atacantesDeclarados, instanceId] };
+}
+
+/**
+ * Resuelve el combate declarado: el rival decide bloqueos (heurística automática, ver
+ * `decidirBloqueos`), los atacantes sin bloqueador pegan directo a la vida rival, los
+ * bloqueados se hacen daño mutuo con su bloqueador, y al final se revisan muertes de ambos
+ * lados. TODO: no implementa el efecto especial de Ignileón (daño extra al ser bloqueado) —
+ * eso necesita un sistema de efectos por carta que todavía no existe.
+ */
+function confirmarAtaque(state: GameState): GameState {
+  if (state.fase !== "pelea") return state;
+  if (state.atacantesDeclarados.length === 0) return state;
+
+  const jugador = state.jugadorActivo;
+  const rival: PlayerId = jugador === "player" ? "enemy" : "player";
+
+  const bloqueos = decidirBloqueos(state, state.atacantesDeclarados, rival);
+
+  let cartasActualizadas = { ...state.cartas };
+  let danioDirectoAlRival = 0;
+
+  for (const atacanteId of state.atacantesDeclarados) {
+    cartasActualizadas[atacanteId] = { ...cartasActualizadas[atacanteId], atacoEsteTurno: true };
+
+    const bloqueadorId = bloqueos[atacanteId];
+
+    if (!bloqueadorId) {
+      danioDirectoAlRival += ataqueActualDe(state, atacanteId);
+      continue;
+    }
+
+    const ataqueAtacante = ataqueActualDe(state, atacanteId);
+    const ataqueBloqueador = ataqueActualDe(state, bloqueadorId);
+
+    cartasActualizadas[bloqueadorId] = {
+      ...cartasActualizadas[bloqueadorId],
+      danio: cartasActualizadas[bloqueadorId].danio + ataqueAtacante,
+    };
+    cartasActualizadas[atacanteId] = {
+      ...cartasActualizadas[atacanteId],
+      danio: cartasActualizadas[atacanteId].danio + ataqueBloqueador,
+    };
+  }
+
+  let estadoResuelto: GameState = {
+    ...state,
+    cartas: cartasActualizadas,
+    [rival]: { ...state[rival], vida: state[rival].vida - danioDirectoAlRival },
+    atacantesDeclarados: [],
+  };
+
+  estadoResuelto = aplicarMuertes(estadoResuelto, jugador);
+  estadoResuelto = aplicarMuertes(estadoResuelto, rival);
+
+  return estadoResuelto;
+}
+
+
+
+/** ¿Este par de criaturas dispara esta fusión? El orden entre A y B no importa. */
+function coincideFusion(fusion: FusionDefinition, defA: CreatureDefinition, defB: CreatureDefinition): boolean {
+  if (fusion.input.modo === "exacta") {
+    const [idA, idB] = fusion.input.cartaIds;
+    return (defA.id === idA && defB.id === idB) || (defA.id === idB && defB.id === idA);
+  }
+
+  const [tipoA, tipoB] = fusion.input.tipos;
+  const aCubreA = defA.tipo.includes(tipoA) && defB.tipo.includes(tipoB);
+  const aCubreB = defA.tipo.includes(tipoB) && defB.tipo.includes(tipoA);
+
+  return aCubreA || aCubreB;
+}
+
+/** Todas las fusiones que matchean el par. Puede haber más de una si se superponen
+ *  (ej. una exacta y una por tipo); eso se resuelve al azar más abajo. */
+function buscarFusionesPosibles(defA: CreatureDefinition, defB: CreatureDefinition): FusionDefinition[] {
+  return fusionDefinitions.filter((fusion) => coincideFusion(fusion, defA, defB));
+}
+
+/** Reparte probabilidad según `peso` (default 1 = todas iguales) y elige una al azar. */
+function elegirFusionAlAzar(fusiones: FusionDefinition[]): FusionDefinition {
+  const pesos = fusiones.map((f) => f.peso ?? 1);
+  const pesoTotal = pesos.reduce((suma, p) => suma + p, 0);
+
+  let umbral = Math.random() * pesoTotal;
+
+  for (let i = 0; i < fusiones.length; i++) {
+    umbral -= pesos[i];
+    if (umbral <= 0) return fusiones[i];
+  }
+
+  return fusiones[fusiones.length - 1];
+}
+
+/**
+ * Fusiona dos criaturas del jugador activo (pueden estar en su mano o en su campo, en
+ * cualquier combinación). Las dos van a la tumba y nace una instancia nueva de la carta
+ * resultado en el campo. Es no-op si el par no tiene ninguna fusión definida, si ya se
+ * fusionó este turno, o si las cartas no son criaturas propias disponibles.
+ */
+function fusionar(state: GameState, instanceIdA: string, instanceIdB: string): GameState {
+  if (!FASES_DE_ACCION.includes(state.fase)) return state;
+  if (state.fusionoEsteTurno) return state;
+  if (instanceIdA === instanceIdB) return state;
+
+  const jugador = state.jugadorActivo;
+  const jugadorState = state[jugador];
+
+  const disponible = (id: string) => jugadorState.mano.includes(id) || jugadorState.campo.includes(id);
+  if (!disponible(instanceIdA) || !disponible(instanceIdB)) return state;
+
+  const defA = getDefinition(state.cartas[instanceIdA].defId);
+  const defB = getDefinition(state.cartas[instanceIdB].defId);
+  if (defA.categoria !== "criatura" || defB.categoria !== "criatura") return state;
+
+  const fusionesPosibles = buscarFusionesPosibles(defA, defB);
+  if (fusionesPosibles.length === 0) return state;
+
+  const fusionElegida = elegirFusionAlAzar(fusionesPosibles);
+  const defResultado = getDefinition(fusionElegida.resultadoId);
+  if (defResultado.categoria !== "criatura") return state;
+
+  let estadoConTumba = moverEntreZonas(state, jugador, instanceIdA, "tumba");
+  estadoConTumba = moverEntreZonas(estadoConTumba, jugador, instanceIdB, "tumba");
+
+  const nuevaInstancia: CardInstance = {
+    instanceId: generarId(),
+    defId: defResultado.id,
+    zona: "campo",
+    danio: 0,
+    turnoEnCampo: state.turno,
+    atacoEsteTurno: false,
+    buffs: [],
+    equipos: [],
+  };
+
+  return {
+    ...estadoConTumba,
+    [jugador]: {
+      ...estadoConTumba[jugador],
+      campo: [...estadoConTumba[jugador].campo, nuevaInstancia.instanceId],
+    },
+    cartas: {
+      ...estadoConTumba.cartas,
+      [nuevaInstancia.instanceId]: nuevaInstancia,
+    },
+    fusionoEsteTurno: true,
+  };
+}
+
+function propietarioDe(state: GameState, instanceId: string): PlayerId {
+  return state.player.campo.includes(instanceId) ? "player" : "enemy";
+}
+
+/** Vitaminas: +1/+1 permanente sobre la instancia objetivo. */
+function aplicarVitaminas(state: GameState, objetivoId: string): GameState {
+  const instancia = state.cartas[objetivoId];
 
   return {
     ...state,
     cartas: {
       ...state.cartas,
-      [proximaId]: { ...state.cartas[proximaId], zona: "mano" },
-    },
-    [jugador]: {
-      ...jugadorState,
-      mazo: restoMazo,
-      mano: [...jugadorState.mano, proximaId],
+      [objetivoId]: { ...instancia, buffs: [...instancia.buffs, { ataque: 1, vida: 1 }] },
     },
   };
 }
 
+/** Bomba de humo: la criatura vuelve a la mano de su dueño. Al volver se resetea
+ *  (sin daño, sin buffs, sin equipos) porque es una carta "nueva" hasta que se reinvoque. */
+function aplicarBombaDeHumo(state: GameState, objetivoId: string): GameState {
+  const propietario = propietarioDe(state, objetivoId);
+  const estadoConCartaEnMano = moverEntreZonas(state, propietario, objetivoId, "mano");
+
+  return {
+    ...estadoConCartaEnMano,
+    cartas: {
+      ...estadoConCartaEnMano.cartas,
+      [objetivoId]: {
+        ...estadoConCartaEnMano.cartas[objetivoId],
+        danio: 0,
+        buffs: [],
+        equipos: [],
+        turnoEnCampo: null,
+        atacoEsteTurno: false,
+      },
+    },
+  };
+}
+
+/** Disparo certero: la criatura objetivo va directo a la tumba de su dueño. */
+function aplicarDisparoCertero(state: GameState, objetivoId: string): GameState {
+  return moverEntreZonas(state, propietarioDe(state, objetivoId), objetivoId, "tumba");
+}
+
+const EFECTOS_MAGIA: Record<string, (state: GameState, objetivoId: string) => GameState> = {
+  vitaminas: aplicarVitaminas,
+  bomba_humo: aplicarBombaDeHumo,
+  disparo_certero: aplicarDisparoCertero,
+};
+
+/**
+ * Juega una carta de magia de la mano del jugador activo sobre una criatura objetivo en
+ * juego (propia o rival, las reglas no restringen el dueño). La magia se manda a la tumba
+ * después de resolverse. No hay límite de magias por turno.
+ */
+function jugarMagia(state: GameState, instanceId: string, objetivoId: string): GameState {
+  if (!FASES_DE_ACCION.includes(state.fase)) return state;
+
+  const jugador = state.jugadorActivo;
+  if (!state[jugador].mano.includes(instanceId)) return state;
+
+  const def = getDefinition(state.cartas[instanceId].defId);
+  if (def.categoria !== "magia") return state;
+
+  const objetivoEnJuego = state.player.campo.includes(objetivoId) || state.enemy.campo.includes(objetivoId);
+  if (!objetivoEnJuego) return state;
+
+  const resolverEfecto = EFECTOS_MAGIA[def.id];
+  if (!resolverEfecto) return state; // magia sin efecto implementado todavía
+
+  const estadoConEfecto = resolverEfecto(state, objetivoId);
+
+  return moverEntreZonas(estadoConEfecto, jugador, instanceId, "tumba");
+}
+
+/**
+ * Equipa una carta de equipo de la mano sobre una criatura objetivo en juego. El equipo
+ * queda "adjunto" (su instancia sale de la mano pero no entra a la lista de campo, para no
+ * pintarse como una carta más en el tablero) y su id se agrega a `equipos` de la criatura.
+ */
+function equipar(state: GameState, instanceId: string, objetivoId: string): GameState {
+  if (!FASES_DE_ACCION.includes(state.fase)) return state;
+
+  const jugador = state.jugadorActivo;
+  if (!state[jugador].mano.includes(instanceId)) return state;
+
+  const def = getDefinition(state.cartas[instanceId].defId);
+  if (def.categoria !== "equipo") return state;
+
+  const objetivoEnJuego = state.player.campo.includes(objetivoId) || state.enemy.campo.includes(objetivoId);
+  if (!objetivoEnJuego) return state;
+
+  const objetivoInstancia = state.cartas[objetivoId];
+
+  return {
+    ...state,
+    [jugador]: {
+      ...state[jugador],
+      mano: state[jugador].mano.filter((id) => id !== instanceId),
+    },
+    cartas: {
+      ...state.cartas,
+      [instanceId]: { ...state.cartas[instanceId], zona: "campo" },
+      [objetivoId]: { ...objetivoInstancia, equipos: [...objetivoInstancia.equipos, instanceId] },
+    },
+  };
+}
+
+/**
+ * IA mínima: una acción por llamada. `useGame` la vuelve a invocar en cada render mientras
+ * sea el turno de la IA, así que esto funciona como un paso a paso — invocar, declarar
+ * atacantes de a uno, confirmar, avanzar fase — hasta devolver el turno al jugador.
+ * No fusiona (elegir un par válido a ciegas no es trivial) y no juega magias/equipos: son
+ * simplificaciones a propósito, no bugs.
+ */
+function decidirAccionIA(state: GameState): Accion {
+  const jugador = state.jugadorActivo;
+
+  if (FASES_DE_ACCION.includes(state.fase) && !state.invocoCriaturaEsteTurno) {
+    const criaturaInvocable = state[jugador].mano.find((id) => {
+      const def = getDefinition(state.cartas[id].defId);
+      return def.categoria === "criatura";
+    });
+
+    if (criaturaInvocable) return { type: "INVOCAR_CRIATURA", instanceId: criaturaInvocable };
+  }
+
+  if (state.fase === "pelea") {
+    const atacanteDisponible = state[jugador].campo.find(
+      (id) => puedeAtacar(state, id) && !state.atacantesDeclarados.includes(id)
+    );
+    if (atacanteDisponible) return { type: "DECLARAR_ATACANTE", instanceId: atacanteDisponible };
+    if (state.atacantesDeclarados.length > 0) return { type: "CONFIRMAR_ATAQUE" };
+  }
+
+  return { type: "AVANZAR_FASE" };
+}
+
 function reducer(state: GameState, accion: Accion): GameState {
   switch (accion.type) {
-    case "TERMINAR_TURNO": {
-      const siguienteJugador: PlayerId = state.jugadorActivo === "player" ? "enemy" : "player";
+    case "AVANZAR_FASE":
+      return avanzarFase(state);
 
-      const estadoConTurnoNuevo: GameState = {
-        ...state,
-        jugadorActivo: siguienteJugador,
-        turno: state.turno + 1,
-        fase: "principal",
-        invocoCriaturaEsteTurno: false,
-        fusionoEsteTurno: false,
-      };
+    case "INVOCAR_CRIATURA":
+      return invocarCriatura(state, accion.instanceId);
 
-      return robarCarta(estadoConTurnoNuevo, siguienteJugador);
-    }
+    case "DECLARAR_ATACANTE":
+      return alternarAtacante(state, accion.instanceId);
+
+    case "CONFIRMAR_ATAQUE":
+      return confirmarAtaque(state);
+
+    case "FUSIONAR":
+      return fusionar(state, accion.instanceIdA, accion.instanceIdB);
+
+    case "JUGAR_MAGIA":
+      return jugarMagia(state, accion.instanceId, accion.objetivoId);
+
+    case "EQUIPAR":
+      return equipar(state, accion.instanceId, accion.objetivoId);
 
     default:
       return state;
@@ -97,6 +628,16 @@ function reducer(state: GameState, accion: Accion): GameState {
 
 export function useGame() {
   const [game, dispatch] = useReducer(reducer, undefined, crearEstadoInicial);
+
+  useEffect(() => {
+    if (game.jugadorActivo !== "enemy") return;
+
+    const timer = setTimeout(() => {
+      dispatch(decidirAccionIA(game));
+    }, 600);
+
+    return () => clearTimeout(timer);
+  }, [game]);
 
   return { game, dispatch };
 }

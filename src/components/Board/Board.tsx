@@ -1,9 +1,122 @@
+import { useState } from "react";
+
 import "./Board.css";
 import Card from "../Card/Card";
 import { useGame } from "../../hooks/useGame";
+import { getDefinition } from "../../data/cards";
+import type { Fase } from "../../types/GameState";
+
+const NOMBRES_FASE: Record<Fase, string> = {
+  inicio: "Inicio de turno",
+  robo: "Fase de robo",
+  principal: "Fase principal",
+  pelea: "Fase de pelea",
+  secundaria: "Fase secundaria",
+  fin: "Fin de turno",
+};
+
+const FASES_DE_ACCION: Fase[] = ["principal", "secundaria"];
 
 function Board() {
   const { game, dispatch } = useGame();
+  const [modoFusion, setModoFusion] = useState(false);
+  const [cartaFusionSeleccionada, setCartaFusionSeleccionada] = useState<string | null>(null);
+  const [cartaMagicaSeleccionada, setCartaMagicaSeleccionada] = useState<string | null>(null);
+
+  const jugadorActivoLabel = game.jugadorActivo === "player" ? "Jugador" : "IA";
+  const enFasePelea = game.fase === "pelea";
+  const esTurnoDelJugador = game.jugadorActivo === "player";
+  const puedeFusionarEsteTurno = FASES_DE_ACCION.includes(game.fase) && !game.fusionoEsteTurno;
+
+  function cancelarSelecciones() {
+    setModoFusion(false);
+    setCartaFusionSeleccionada(null);
+    setCartaMagicaSeleccionada(null);
+  }
+
+  function alternarModoFusion() {
+    if (modoFusion) {
+      cancelarSelecciones();
+      return;
+    }
+    setModoFusion(true);
+    setCartaMagicaSeleccionada(null);
+  }
+
+  function manejarSeleccionParaFusion(instanceId: string) {
+    if (cartaFusionSeleccionada === null) {
+      setCartaFusionSeleccionada(instanceId);
+      return;
+    }
+
+    if (cartaFusionSeleccionada === instanceId) {
+      setCartaFusionSeleccionada(null);
+      return;
+    }
+
+    dispatch({ type: "FUSIONAR", instanceIdA: cartaFusionSeleccionada, instanceIdB: instanceId });
+    setCartaFusionSeleccionada(null);
+    setModoFusion(false);
+  }
+
+  /** Usa la magia/equipo en espera de objetivo sobre la criatura clickeada. */
+  function usarComoObjetivo(objetivoId: string) {
+    if (cartaMagicaSeleccionada === null) return;
+
+    const def = getDefinition(game.cartas[cartaMagicaSeleccionada].defId);
+
+    if (def.categoria === "magia") {
+      dispatch({ type: "JUGAR_MAGIA", instanceId: cartaMagicaSeleccionada, objetivoId });
+    } else if (def.categoria === "equipo") {
+      dispatch({ type: "EQUIPAR", instanceId: cartaMagicaSeleccionada, objetivoId });
+    }
+
+    setCartaMagicaSeleccionada(null);
+  }
+
+  function manejarClickCartaEnMano(instanceId: string) {
+    if (modoFusion) {
+      manejarSeleccionParaFusion(instanceId);
+      return;
+    }
+
+    if (cartaMagicaSeleccionada !== null) {
+      // Mientras se espera un objetivo, un segundo click sobre la misma carta cancela.
+      if (cartaMagicaSeleccionada === instanceId) setCartaMagicaSeleccionada(null);
+      return;
+    }
+
+    const def = getDefinition(game.cartas[instanceId].defId);
+
+    if (def.categoria === "criatura") {
+      dispatch({ type: "INVOCAR_CRIATURA", instanceId });
+      return;
+    }
+
+    // Magia o equipo: queda "en espera", el próximo click en una criatura en juego es el objetivo.
+    setModoFusion(false);
+    setCartaMagicaSeleccionada(instanceId);
+  }
+
+  function manejarClickCriaturaPropia(instanceId: string) {
+    if (cartaMagicaSeleccionada !== null) {
+      usarComoObjetivo(instanceId);
+      return;
+    }
+    if (modoFusion) {
+      manejarSeleccionParaFusion(instanceId);
+      return;
+    }
+    if (enFasePelea && esTurnoDelJugador) {
+      dispatch({ type: "DECLARAR_ATACANTE", instanceId });
+    }
+  }
+
+  function manejarClickCriaturaRival(instanceId: string) {
+    if (cartaMagicaSeleccionada !== null) {
+      usarComoObjetivo(instanceId);
+    }
+  }
 
   return (
     <div className="board">
@@ -12,24 +125,80 @@ function Board() {
 
         <div className="hand">Mano IA ({game.enemy.mano.length} cartas)</div>
 
-        <div className="field">Campo IA</div>
+        <div className="field">
+          {game.enemy.campo.map((instanceId) => (
+            <Card
+              key={instanceId}
+              instance={game.cartas[instanceId]}
+              onClick={cartaMagicaSeleccionada !== null ? () => manejarClickCriaturaRival(instanceId) : undefined}
+            />
+          ))}
+        </div>
       </div>
 
       <div className="player-area player">
-        <div className="field">Campo Jugador</div>
+        <div className="field">
+          {game.player.campo.map((instanceId) => (
+            <Card
+              key={instanceId}
+              instance={game.cartas[instanceId]}
+              seleccionada={
+                cartaFusionSeleccionada === instanceId || game.atacantesDeclarados.includes(instanceId)
+              }
+              onClick={
+                modoFusion || cartaMagicaSeleccionada !== null || (enFasePelea && esTurnoDelJugador)
+                  ? () => manejarClickCriaturaPropia(instanceId)
+                  : undefined
+              }
+            />
+          ))}
+        </div>
 
         <div className="hand">
           {game.player.mano.map((instanceId) => (
-            <Card key={instanceId} instance={game.cartas[instanceId]} />
+            <Card
+              key={instanceId}
+              instance={game.cartas[instanceId]}
+              seleccionada={
+                cartaFusionSeleccionada === instanceId || cartaMagicaSeleccionada === instanceId
+              }
+              onClick={() => manejarClickCartaEnMano(instanceId)}
+            />
           ))}
         </div>
 
         <div className="player-info">❤️ Jugador - Vida: {game.player.vida}</div>
       </div>
 
-      <button className="end-turn" onClick={() => dispatch({ type: "TERMINAR_TURNO" })}>
-        Finalizar turno (Turno {game.turno} - {game.jugadorActivo === "player" ? "Jugador" : "IA"})
-      </button>
+      <div className="turn-bar">
+        <span className="turn-info">
+          Turno {game.turno} — {jugadorActivoLabel} — {NOMBRES_FASE[game.fase]}
+        </span>
+
+        {!esTurnoDelJugador && <span className="turn-info">La IA está jugando...</span>}
+        {modoFusion && <span className="turn-info">Elegí 2 criaturas para fusionar</span>}
+        {cartaMagicaSeleccionada !== null && (
+          <span className="turn-info">Elegí una criatura objetivo (tuya o rival)</span>
+        )}
+
+        {esTurnoDelJugador && puedeFusionarEsteTurno && (
+          <button className="end-turn" onClick={alternarModoFusion}>
+            {modoFusion ? "Cancelar fusión" : "Fusionar cartas"}
+          </button>
+        )}
+
+        {esTurnoDelJugador && enFasePelea && game.atacantesDeclarados.length > 0 && (
+          <button className="end-turn" onClick={() => dispatch({ type: "CONFIRMAR_ATAQUE" })}>
+            Confirmar ataque ({game.atacantesDeclarados.length})
+          </button>
+        )}
+
+        {esTurnoDelJugador && (
+          <button className="end-turn" onClick={() => dispatch({ type: "AVANZAR_FASE" })}>
+            Avanzar fase
+          </button>
+        )}
+      </div>
     </div>
   );
 }

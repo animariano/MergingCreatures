@@ -13,4 +13,6 @@ export interface GameState {
   enemy: Player;
   invocoCriaturaEsteTurno: boolean;
   fusionoEsteTurno: boolean;
+  /** Criaturas del jugador activo declaradas como atacantes en la fase de pelea actual. */
+  atacantesDeclarados: string[];
 }

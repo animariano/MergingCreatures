@@ -1,7 +1,7 @@
 import { demoDeckList } from "../data/deckList";
 import type { CardInstance } from "../types/CardInstance";
 
-function generarId(): string {
+export function generarId(): string {
   // crypto.randomUUID existe en todos los navegadores modernos; evitamos depender de libs externas.
   return crypto.randomUUID();
 }
