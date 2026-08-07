@@ -9,50 +9,38 @@ type CardProps = {
   onClick?: () => void;
   /** Resalta la carta (por ejemplo: declarada como atacante). */
   seleccionada?: boolean;
+  onMouseEnter?: () => void;
+  onMouseLeave?: () => void;
 };
 
-export default function Card({ instance, onClick, seleccionada }: CardProps) {
+export default function Card({ instance, onClick, seleccionada, onMouseEnter, onMouseLeave }: CardProps) {
   const def = getDefinition(instance.defId);
-
-  if (def.categoria !== "criatura") {
-    const clasesNoCriatura = ["card", "card-no-criatura"];
-    if (onClick) clasesNoCriatura.push("card-clickable");
-    if (seleccionada) clasesNoCriatura.push("card-seleccionada");
-
-    return (
-      <div className={clasesNoCriatura.join(" ")} onClick={onClick}>
-        <div className="card-name">{def.nombre}</div>
-        <div className="card-image">
-        <img src={def.image} alt={def.nombre} />
-        </div>
-        <div className="card-effect">{def.efectoTexto}</div>
-      </div>
-    );
-  }
-
-  const buffAtaque = instance.buffs.reduce((suma, b) => suma + b.ataque, 0);
-  const buffVida = instance.buffs.reduce((suma, b) => suma + b.vida, 0);
-
-  const ataqueActual = def.ataque + buffAtaque;
-  const vidaActual = def.vida + buffVida - instance.danio;
+  const esCriatura = def.categoria === "criatura";
 
   const clases = ["card"];
   if (onClick) clases.push("card-clickable");
   if (seleccionada) clases.push("card-seleccionada");
 
+  const buffAtaque = esCriatura ? instance.buffs.reduce((suma, b) => suma + b.ataque, 0) : 0;
+  const buffVida = esCriatura ? instance.buffs.reduce((suma, b) => suma + b.vida, 0) : 0;
+
+  const ataqueActual = esCriatura ? def.ataque + buffAtaque : 0;
+  const vidaActual = esCriatura ? def.vida + buffVida - instance.danio : 0;
+
   return (
-    <div className={clases.join(" ")} onClick={onClick}>
-      <div className="card-name">{def.nombre}</div>
+    <div className={clases.join(" ")} onClick={onClick} onMouseEnter={onMouseEnter} onMouseLeave={onMouseLeave}>
+      {def.image ? (
+        <img className="card-art" src={def.image} alt={def.nombre} />
+      ) : (
+        <div className="card-art-placeholder">{def.nombre}</div>
+      )}
 
-      <div className="card-image">
-        <img src={def.image} alt={def.nombre} />
-      </div>
-
-      <div className="card-type">{def.tipo.join("/")}</div>
-      <div className="card-stats">
-        <span>⚔ {ataqueActual}</span>
-        <span>❤️ {vidaActual}</span>
-      </div>
+      {esCriatura && (
+        <>
+          <div className="card-stat card-stat-ataque">{ataqueActual}</div>
+          <div className="card-stat card-stat-vida">{vidaActual}</div>
+        </>
+      )}
     </div>
   );
 }

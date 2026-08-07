@@ -11,7 +11,7 @@ export const cardDefinitions: CardDefinition[] = [
     ataque: 1,
     vida: 4,
     esFusion: false,
-    image: "/cards/criaturas/tortuga.jpg",
+    image: "/cards/criaturas/tortuga.png",
   },
   {
     id: "aguila",
@@ -22,7 +22,7 @@ export const cardDefinitions: CardDefinition[] = [
     ataque: 2,
     vida: 2,
     puedeAtacarAlEntrar: true,
-    image: "/cards/criaturas/aguila.jpg",
+    image: "/cards/criaturas/aguila.png",
     esFusion: false,
   },
   {
@@ -33,7 +33,7 @@ export const cardDefinitions: CardDefinition[] = [
     nivel: 1,
     ataque: 2,
     vida: 3,
-    image: "/cards/criaturas/cactus.jpg",
+    image: "/cards/criaturas/cactus.png",
     noPuedeAtacar: true,
     esFusion: false,
   },
@@ -46,7 +46,7 @@ export const cardDefinitions: CardDefinition[] = [
     ataque: 1,
     vida: 2,
     noPuedeSerBloqueado: true,
-    image: "/cards/criaturas/topo.jpg",
+    image: "/cards/criaturas/topo.png",
     esFusion: false,
   },
   {
@@ -58,7 +58,7 @@ export const cardDefinitions: CardDefinition[] = [
     ataque: 3,
     vida: 1,
     puedeAtacarAlEntrar: true,
-    image: "/cards/criaturas/colibri.jpg",
+    image: "/cards/criaturas/colibri.png",
     esFusion: false,
   },
   {
@@ -69,7 +69,7 @@ export const cardDefinitions: CardDefinition[] = [
     nivel: 1,
     ataque: 3,
     vida: 3,
-    image: "/cards/criaturas/leon.jpg",
+    image: "/cards/criaturas/leon.png",
     esFusion: false,
   },
   {
@@ -80,7 +80,7 @@ export const cardDefinitions: CardDefinition[] = [
     nivel: 1,
     ataque: 2,
     vida: 1,
-    image: "/cards/criaturas/conejo_fuego.jpg",
+    image: "/cards/criaturas/conejo_fuego.png",
     esFusion: false,
   },
 
@@ -93,7 +93,7 @@ export const cardDefinitions: CardDefinition[] = [
     nivel: 2,
     ataque: 3,
     vida: 6,
-    image: "/cards/criaturas/caparazor.jpg",
+    image: "/cards/fusiones/caparazor.png",
     esFusion: true,
   },
   {
@@ -104,7 +104,7 @@ export const cardDefinitions: CardDefinition[] = [
     nivel: 2,
     ataque: 6,
     vida: 6,
-    image: "/cards/criaturas/ignileon.jpg",
+    image: "/cards/criaturas/ignileon.png",
     efectoTexto:
       "Al ser bloqueado, inflige daño al oponente igual a la diferencia entre su ataque y la vida de la criatura bloqueadora.",
     esFusion: true,
@@ -116,18 +116,21 @@ export const cardDefinitions: CardDefinition[] = [
     categoria: "magia",
     nombre: "Vitaminas",
     efectoTexto: "Aumenta el ataque y la vida de una criatura en 1.",
+    image: "/cards/magias/vitamina.png",
   },
   {
     id: "bomba_humo",
     categoria: "magia",
     nombre: "Bomba de Humo",
     efectoTexto: "Regresa una criatura objetivo en juego a la mano de su propietario.",
+    image: "/cards/magias/bomba_humo.png",
   },
   {
     id: "disparo_certero",
     categoria: "magia",
     nombre: "Disparo Certero",
     efectoTexto: "La criatura objetivo en juego va a la tumba.",
+    image: "/cards/magias/disparo_certero.png",
   },
 
   // Equipo
@@ -136,6 +139,7 @@ export const cardDefinitions: CardDefinition[] = [
     categoria: "equipo",
     nombre: "Soga",
     efectoTexto: "La criatura objetivo no puede atacar ni bloquear.",
+    image: "/cards/equipo/soga.png",
   },
 ];
 

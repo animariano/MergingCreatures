@@ -2,7 +2,7 @@ import { useState } from "react";
 
 import "./Board.css";
 import Card from "../Card/Card";
-import { useGame } from "../../hooks/useGame";
+import { useGame, hayAtacantesDisponibles } from "../../hooks/useGame";
 import { getDefinition } from "../../data/cards";
 import type { Fase } from "../../types/GameState";
 
@@ -22,11 +22,22 @@ function Board() {
   const [modoFusion, setModoFusion] = useState(false);
   const [cartaFusionSeleccionada, setCartaFusionSeleccionada] = useState<string | null>(null);
   const [cartaMagicaSeleccionada, setCartaMagicaSeleccionada] = useState<string | null>(null);
+  const [atacanteParaBloquear, setAtacanteParaBloquear] = useState<string | null>(null);
+  const [cartaEnHover, setCartaEnHover] = useState<string | null>(null);
 
+  const combateEnCurso = game.combateEnCurso;
   const jugadorActivoLabel = game.jugadorActivo === "player" ? "Jugador" : "IA";
   const enFasePelea = game.fase === "pelea";
   const esTurnoDelJugador = game.jugadorActivo === "player";
   const puedeFusionarEsteTurno = FASES_DE_ACCION.includes(game.fase) && !game.fusionoEsteTurno;
+
+  // Mismo criterio que el auto-avance de useGame: si la fase actual no tiene ninguna
+  // acción posible, no tiene sentido mostrar el botón para avanzarla a mano — va a
+  // avanzar sola en un instante.
+  const faseTieneAccionManual =
+    game.fase === "principal" ||
+    game.fase === "secundaria" ||
+    (game.fase === "pelea" && hayAtacantesDisponibles(game, "player"));
 
   function cancelarSelecciones() {
     setModoFusion(false);
@@ -113,45 +124,89 @@ function Board() {
   }
 
   function manejarClickCriaturaRival(instanceId: string) {
+    if (combateEnCurso !== null && combateEnCurso.atacantes.includes(instanceId)) {
+      setAtacanteParaBloquear((actual) => (actual === instanceId ? null : instanceId));
+      return;
+    }
     if (cartaMagicaSeleccionada !== null) {
       usarComoObjetivo(instanceId);
     }
   }
 
+  /** Asigna la criatura clickeada como bloqueadora del atacante elegido previamente. */
+  function manejarClickPosibleBloqueador(bloqueadorId: string) {
+    if (combateEnCurso === null || atacanteParaBloquear === null) return;
+    dispatch({ type: "ASIGNAR_BLOQUEADOR", atacanteId: atacanteParaBloquear, bloqueadorId });
+    setAtacanteParaBloquear(null);
+  }
+
   return (
-    <div className="board">
-      <div className="player-area enemy">
-        <div className="player-info">❤️ IA - Vida: {game.enemy.vida}</div>
-
-        <div className="hand">Mano IA ({game.enemy.mano.length} cartas)</div>
-
-        <div className="field">
-          {game.enemy.campo.map((instanceId) => (
-            <Card
-              key={instanceId}
-              instance={game.cartas[instanceId]}
-              onClick={cartaMagicaSeleccionada !== null ? () => manejarClickCriaturaRival(instanceId) : undefined}
-            />
-          ))}
-        </div>
+    <div className="game-layout">
+      <div className="preview-panel">
+        {cartaEnHover !== null ? (
+          <Card instance={game.cartas[cartaEnHover]} />
+        ) : (
+          <div className="preview-panel-empty">Pasá el mouse por una carta para verla en grande</div>
+        )}
       </div>
 
-      <div className="player-area player">
+      <div className="board">
+        <div className="player-area enemy">
+          <div className="player-info">❤️ IA - Vida: {game.enemy.vida}</div>
+
+          <div className="hand">Mano IA ({game.enemy.mano.length} cartas)</div>
+
+          <div className="field">
+            {game.enemy.campo.map((instanceId) => {
+              const esAtacanteDeclarado = combateEnCurso?.atacantes.includes(instanceId) ?? false;
+              const tieneBloqueadorAsignado = combateEnCurso?.bloqueos[instanceId] !== undefined;
+
+              return (
+                <Card
+                  key={instanceId}
+                  instance={game.cartas[instanceId]}
+                  seleccionada={atacanteParaBloquear === instanceId || tieneBloqueadorAsignado}
+                  onMouseEnter={() => setCartaEnHover(instanceId)}
+                  onMouseLeave={() => setCartaEnHover(null)}
+                  onClick={
+                    esAtacanteDeclarado || cartaMagicaSeleccionada !== null
+                      ? () => manejarClickCriaturaRival(instanceId)
+                      : undefined
+                  }
+                />
+              );
+            })}
+          </div>
+        </div>
+
+        <div className="player-area player">
         <div className="field">
-          {game.player.campo.map((instanceId) => (
-            <Card
-              key={instanceId}
-              instance={game.cartas[instanceId]}
-              seleccionada={
-                cartaFusionSeleccionada === instanceId || game.atacantesDeclarados.includes(instanceId)
-              }
-              onClick={
-                modoFusion || cartaMagicaSeleccionada !== null || (enFasePelea && esTurnoDelJugador)
-                  ? () => manejarClickCriaturaPropia(instanceId)
-                  : undefined
-              }
-            />
-          ))}
+          {game.player.campo.map((instanceId) => {
+            const esBloqueadoraAsignada = combateEnCurso
+              ? Object.values(combateEnCurso.bloqueos).includes(instanceId)
+              : false;
+
+            return (
+              <Card
+                key={instanceId}
+                instance={game.cartas[instanceId]}
+                seleccionada={
+                  cartaFusionSeleccionada === instanceId ||
+                  game.atacantesDeclarados.includes(instanceId) ||
+                  esBloqueadoraAsignada
+                }
+                onMouseEnter={() => setCartaEnHover(instanceId)}
+                onMouseLeave={() => setCartaEnHover(null)}
+                onClick={
+                  combateEnCurso !== null && atacanteParaBloquear !== null
+                    ? () => manejarClickPosibleBloqueador(instanceId)
+                    : modoFusion || cartaMagicaSeleccionada !== null || (enFasePelea && esTurnoDelJugador)
+                    ? () => manejarClickCriaturaPropia(instanceId)
+                    : undefined
+                }
+              />
+            );
+          })}
         </div>
 
         <div className="hand">
@@ -162,6 +217,8 @@ function Board() {
               seleccionada={
                 cartaFusionSeleccionada === instanceId || cartaMagicaSeleccionada === instanceId
               }
+              onMouseEnter={() => setCartaEnHover(instanceId)}
+              onMouseLeave={() => setCartaEnHover(null)}
               onClick={() => manejarClickCartaEnMano(instanceId)}
             />
           ))}
@@ -175,10 +232,23 @@ function Board() {
           Turno {game.turno} — {jugadorActivoLabel} — {NOMBRES_FASE[game.fase]}
         </span>
 
-        {!esTurnoDelJugador && <span className="turn-info">La IA está jugando...</span>}
+        {!esTurnoDelJugador && combateEnCurso === null && (
+          <span className="turn-info">La IA está jugando...</span>
+        )}
+        {combateEnCurso !== null && (
+          <span className="turn-info">
+            La IA te está atacando — clickeá un atacante y después tu criatura para bloquearlo (opcional)
+          </span>
+        )}
         {modoFusion && <span className="turn-info">Elegí 2 criaturas para fusionar</span>}
         {cartaMagicaSeleccionada !== null && (
           <span className="turn-info">Elegí una criatura objetivo (tuya o rival)</span>
+        )}
+
+        {combateEnCurso !== null && (
+          <button className="end-turn" onClick={() => dispatch({ type: "CONFIRMAR_BLOQUEOS" })}>
+            Confirmar bloqueos
+          </button>
         )}
 
         {esTurnoDelJugador && puedeFusionarEsteTurno && (
@@ -193,11 +263,12 @@ function Board() {
           </button>
         )}
 
-        {esTurnoDelJugador && (
+        {esTurnoDelJugador && faseTieneAccionManual && (
           <button className="end-turn" onClick={() => dispatch({ type: "AVANZAR_FASE" })}>
             Avanzar fase
           </button>
         )}
+        </div>
       </div>
     </div>
   );

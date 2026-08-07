@@ -25,7 +25,9 @@ type Accion =
   | { type: "CONFIRMAR_ATAQUE" }
   | { type: "FUSIONAR"; instanceIdA: string; instanceIdB: string }
   | { type: "JUGAR_MAGIA"; instanceId: string; objetivoId: string }
-  | { type: "EQUIPAR"; instanceId: string; objetivoId: string };
+  | { type: "EQUIPAR"; instanceId: string; objetivoId: string }
+  | { type: "ASIGNAR_BLOQUEADOR"; atacanteId: string; bloqueadorId: string }
+  | { type: "CONFIRMAR_BLOQUEOS" };
 
 function armarJugadorInicial(cartas: Record<string, CardInstance>): Player {
   const mazoMezclado = mezclar(crearMazo());
@@ -64,6 +66,7 @@ function crearEstadoInicial(): GameState {
     invocoCriaturaEsteTurno: false,
     fusionoEsteTurno: false,
     atacantesDeclarados: [],
+    combateEnCurso: null,
   };
 }
 
@@ -154,7 +157,7 @@ function avanzarFase(state: GameState): GameState {
   if (esFinDeTurno) {
     const siguienteJugador: PlayerId = state.jugadorActivo === "player" ? "enemy" : "player";
 
-    return {
+    const estadoConTurnoNuevo: GameState = {
       ...state,
       jugadorActivo: siguienteJugador,
       turno: state.turno + 1,
@@ -163,6 +166,8 @@ function avanzarFase(state: GameState): GameState {
       fusionoEsteTurno: false,
       atacantesDeclarados: [],
     };
+
+    return aplicarEfectosDeFase(estadoConTurnoNuevo, "inicio");
   }
 
   const siguienteFase = ORDEN_FASES[indiceActual + 1];
@@ -221,6 +226,11 @@ function puedeAtacar(state: GameState, instanceId: string): boolean {
   if (entroEsteTurno && !def.puedeAtacarAlEntrar) return false;
 
   return true;
+}
+
+/** ¿Tiene el jugador indicado alguna criatura que pueda sumarse como atacante ahora mismo? */
+export function hayAtacantesDisponibles(state: GameState, jugador: PlayerId): boolean {
+  return state[jugador].campo.some((id) => puedeAtacar(state, id));
 }
 
 /** Ataque/vida actuales de una criatura (base + buffs, y en el caso de vida, menos el daño
@@ -313,27 +323,24 @@ function alternarAtacante(state: GameState, instanceId: string): GameState {
 }
 
 /**
- * Resuelve el combate declarado: el rival decide bloqueos (heurística automática, ver
- * `decidirBloqueos`), los atacantes sin bloqueador pegan directo a la vida rival, los
- * bloqueados se hacen daño mutuo con su bloqueador, y al final se revisan muertes de ambos
- * lados. TODO: no implementa el efecto especial de Ignileón (daño extra al ser bloqueado) —
- * eso necesita un sistema de efectos por carta que todavía no existe.
+ * Aplica el daño de un combate ya resuelto (atacantes + bloqueos definidos) y revisa
+ * muertes de ambos lados. Único punto donde se calcula daño de combate, lo use quien lo use:
+ * la heurística automática o la confirmación manual del jugador. TODO: no implementa el
+ * efecto especial de Ignileón (daño extra al ser bloqueado) — eso necesita un sistema de
+ * efectos por carta que todavía no existe.
  */
-function confirmarAtaque(state: GameState): GameState {
-  if (state.fase !== "pelea") return state;
-  if (state.atacantesDeclarados.length === 0) return state;
-
-  const jugador = state.jugadorActivo;
-  const rival: PlayerId = jugador === "player" ? "enemy" : "player";
-
-  const bloqueos = decidirBloqueos(state, state.atacantesDeclarados, rival);
+function resolverCombate(
+  state: GameState,
+  rival: PlayerId,
+  atacantes: string[],
+  bloqueos: Record<string, string>
+): GameState {
+  const jugadorAtacante: PlayerId = rival === "player" ? "enemy" : "player";
 
   let cartasActualizadas = { ...state.cartas };
   let danioDirectoAlRival = 0;
 
-  for (const atacanteId of state.atacantesDeclarados) {
-    cartasActualizadas[atacanteId] = { ...cartasActualizadas[atacanteId], atacoEsteTurno: true };
-
+  for (const atacanteId of atacantes) {
     const bloqueadorId = bloqueos[atacanteId];
 
     if (!bloqueadorId) {
@@ -358,13 +365,92 @@ function confirmarAtaque(state: GameState): GameState {
     ...state,
     cartas: cartasActualizadas,
     [rival]: { ...state[rival], vida: state[rival].vida - danioDirectoAlRival },
-    atacantesDeclarados: [],
+    combateEnCurso: null,
   };
 
-  estadoResuelto = aplicarMuertes(estadoResuelto, jugador);
+  estadoResuelto = aplicarMuertes(estadoResuelto, jugadorAtacante);
   estadoResuelto = aplicarMuertes(estadoResuelto, rival);
 
   return estadoResuelto;
+}
+
+/**
+ * Declara en firme a los atacantes ya seleccionados. Si el rival es la IA, bloquea sola con
+ * la heurística y el combate se resuelve en el acto. Si el rival es el jugador humano, el
+ * combate queda pendiente (`combateEnCurso`) hasta que elija bloqueadores a mano.
+ */
+function confirmarAtaque(state: GameState): GameState {
+  if (state.fase !== "pelea") return state;
+  if (state.atacantesDeclarados.length === 0) return state;
+
+  const jugador = state.jugadorActivo;
+  const rival: PlayerId = jugador === "player" ? "enemy" : "player";
+  const atacantes = state.atacantesDeclarados;
+
+  const cartasActualizadas = { ...state.cartas };
+  for (const id of atacantes) {
+    cartasActualizadas[id] = { ...cartasActualizadas[id], atacoEsteTurno: true };
+  }
+
+  const estadoConAtaqueDeclarado: GameState = {
+    ...state,
+    cartas: cartasActualizadas,
+    atacantesDeclarados: [],
+  };
+
+  if (rival === "player") {
+    return { ...estadoConAtaqueDeclarado, combateEnCurso: { atacantes, bloqueos: {} } };
+  }
+
+  const bloqueos = decidirBloqueos(estadoConAtaqueDeclarado, atacantes, rival);
+  return resolverCombate(estadoConAtaqueDeclarado, rival, atacantes, bloqueos);
+}
+
+/**
+ * El jugador humano (siempre defensor en este flujo) asigna o quita una criatura suya como
+ * bloqueadora de un atacante puntual. Una bloqueadora solo puede cubrir un ataque a la vez
+ * (si ya estaba asignada a otro atacante, se la saca de ahí). Clickear la misma pareja de
+ * nuevo desasigna.
+ */
+function asignarBloqueador(state: GameState, atacanteId: string, bloqueadorId: string): GameState {
+  if (state.combateEnCurso === null) return state;
+  if (!state.combateEnCurso.atacantes.includes(atacanteId)) return state;
+
+  const defAtacante = getDefinition(state.cartas[atacanteId].defId);
+  if (defAtacante.categoria === "criatura" && defAtacante.noPuedeSerBloqueado) return state;
+
+  if (!state.player.campo.includes(bloqueadorId)) return state;
+  if (!puedeBloquear(state, bloqueadorId)) return state;
+
+  const bloqueosActuales = state.combateEnCurso.bloqueos;
+
+  if (bloqueosActuales[atacanteId] === bloqueadorId) {
+    const bloqueosSinEsteAtacante = Object.fromEntries(
+      Object.entries(bloqueosActuales).filter(([idAtacante]) => idAtacante !== atacanteId)
+    );
+
+    return { ...state, combateEnCurso: { ...state.combateEnCurso, bloqueos: bloqueosSinEsteAtacante } };
+  }
+
+  const bloqueosSinEsteBloqueador = Object.fromEntries(
+    Object.entries(bloqueosActuales).filter(([, idBloqueador]) => idBloqueador !== bloqueadorId)
+  );
+
+  return {
+    ...state,
+    combateEnCurso: {
+      ...state.combateEnCurso,
+      bloqueos: { ...bloqueosSinEsteBloqueador, [atacanteId]: bloqueadorId },
+    },
+  };
+}
+
+/** El jugador humano termina de elegir bloqueadores (incluso si dejó ataques sin bloquear a propósito). */
+function confirmarBloqueos(state: GameState): GameState {
+  if (state.combateEnCurso === null) return state;
+
+  const { atacantes, bloqueos } = state.combateEnCurso;
+  return resolverCombate(state, "player", atacantes, bloqueos);
 }
 
 
@@ -599,6 +685,12 @@ function decidirAccionIA(state: GameState): Accion {
 }
 
 function reducer(state: GameState, accion: Accion): GameState {
+  // Con un combate pendiente de bloqueo, solo se aceptan acciones de bloqueo: todo lo demás
+  // (invocar, fusionar, avanzar fase, etc.) espera a que el jugador termine de decidir.
+  if (state.combateEnCurso !== null && accion.type !== "ASIGNAR_BLOQUEADOR" && accion.type !== "CONFIRMAR_BLOQUEOS") {
+    return state;
+  }
+
   switch (accion.type) {
     case "AVANZAR_FASE":
       return avanzarFase(state);
@@ -621,6 +713,12 @@ function reducer(state: GameState, accion: Accion): GameState {
     case "EQUIPAR":
       return equipar(state, accion.instanceId, accion.objetivoId);
 
+    case "ASIGNAR_BLOQUEADOR":
+      return asignarBloqueador(state, accion.atacanteId, accion.bloqueadorId);
+
+    case "CONFIRMAR_BLOQUEOS":
+      return confirmarBloqueos(state);
+
     default:
       return state;
   }
@@ -631,10 +729,33 @@ export function useGame() {
 
   useEffect(() => {
     if (game.jugadorActivo !== "enemy") return;
+    if (game.combateEnCurso !== null) return; // esperando que el jugador elija bloqueadores
 
     const timer = setTimeout(() => {
       dispatch(decidirAccionIA(game));
     }, 600);
+
+    return () => clearTimeout(timer);
+  }, [game]);
+
+  // "inicio", "robo" y "fin" no tienen ninguna acción posible para el jugador humano
+  // (hoy); "pelea" tampoco si no le queda ninguna criatura habilitada para atacar.
+  // En esos casos avanzamos la fase solos, para no obligar a clickear "Avanzar fase"
+  // en pasos que no requieren ninguna decisión.
+  useEffect(() => {
+    if (game.jugadorActivo !== "player") return;
+
+    const faseSinAccionPosible =
+      game.fase === "inicio" ||
+      game.fase === "robo" ||
+      game.fase === "fin" ||
+      (game.fase === "pelea" && !hayAtacantesDisponibles(game, "player"));
+
+    if (!faseSinAccionPosible) return;
+
+    const timer = setTimeout(() => {
+      dispatch({ type: "AVANZAR_FASE" });
+    }, 350);
 
     return () => clearTimeout(timer);
   }, [game]);

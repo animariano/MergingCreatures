@@ -15,4 +15,7 @@ export interface GameState {
   fusionoEsteTurno: boolean;
   /** Criaturas del jugador activo declaradas como atacantes en la fase de pelea actual. */
   atacantesDeclarados: string[];
+  /** Combate ya declarado, esperando que el jugador humano (cuando es el que se defiende)
+   *  termine de elegir bloqueadores. `null` cuando no hay combate pendiente de resolver. */
+  combateEnCurso: { atacantes: string[]; bloqueos: Record<string, string> } | null;
 }

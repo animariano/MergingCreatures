@@ -13,6 +13,7 @@ export interface CreatureDefinition {
   noPuedeSerBloqueado?: boolean;
   efectoTexto?: string;
   esFusion: boolean;
+  image?: string;
 }
 
 export interface MagiaDefinition {
@@ -20,6 +21,7 @@ export interface MagiaDefinition {
   categoria: "magia";
   nombre: string;
   efectoTexto: string;
+  image?: string;
 }
 
 export interface EquipoDefinition {
@@ -27,6 +29,7 @@ export interface EquipoDefinition {
   categoria: "equipo";
   nombre: string;
   efectoTexto: string;
+  image?: string;
 }
 
 export type CardDefinition = CreatureDefinition | MagiaDefinition | EquipoDefinition;
