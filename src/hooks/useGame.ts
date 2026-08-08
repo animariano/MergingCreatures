@@ -7,7 +7,7 @@ import { fusionDefinitions } from "../data/fusions";
 import type { Fase, GameState } from "../types/GameState";
 import type { CardInstance, Zona } from "../types/CardInstance";
 import type { Player, PlayerId } from "../types/Player";
-import type { CreatureDefinition } from "../types/CardDefinition";
+import type { CreatureDefinition, PalabraClave } from "../types/CardDefinition";
 import type { FusionDefinition } from "../types/FusionDefinition";
 
 const CARTAS_MANO_INICIAL = 5;
@@ -211,9 +211,15 @@ function tieneEquipoQueImpideAtacar(state: GameState, instancia: CardInstance): 
   );
 }
 
+/** Búsqueda de PalabrasClave: punto único donde se consulta si una criatura tiene una
+ *  habilidad con nombre. Agregar una palabra clave nueva no toca esta función. */
+function tieneKeyword(def: CreatureDefinition, keyword: PalabraClave): boolean {
+  return def.palabrasClave?.includes(keyword) ?? false;
+}
+
 /** ¿Esta criatura puede sumarse como atacante ahora mismo? No cubre bloqueo (todavía no existe
  *  quién decida bloquear del otro lado: eso llega con la IA). */
-function puedeAtacar(state: GameState, instanceId: string): boolean {
+export function puedeAtacar(state: GameState, instanceId: string): boolean {
   const instancia = state.cartas[instanceId];
   const def = getDefinition(instancia.defId);
 
@@ -223,7 +229,7 @@ function puedeAtacar(state: GameState, instanceId: string): boolean {
   if (tieneEquipoQueImpideAtacar(state, instancia)) return false;
 
   const entroEsteTurno = instancia.turnoEnCampo === state.turno;
-  if (entroEsteTurno && !def.puedeAtacarAlEntrar) return false;
+  if (entroEsteTurno && !tieneKeyword(def, "rapidez")) return false;
 
   return true;
 }
@@ -231,6 +237,19 @@ function puedeAtacar(state: GameState, instanceId: string): boolean {
 /** ¿Tiene el jugador indicado alguna criatura que pueda sumarse como atacante ahora mismo? */
 export function hayAtacantesDisponibles(state: GameState, jugador: PlayerId): boolean {
   return state[jugador].campo.some((id) => puedeAtacar(state, id));
+}
+
+/** Mal de invocación: entró al campo este mismo turno y no tiene "rapidez". Se usa solo
+ *  para el ícono de "mareo" superpuesto — no confundir con `puedeAtacar`, que además
+ *  contempla si ya atacó o si tiene un equipo que se lo impide. */
+export function tieneMalDeInvocacion(state: GameState, instanceId: string): boolean {
+  const instancia = state.cartas[instanceId];
+  const def = getDefinition(instancia.defId);
+
+  if (def.categoria !== "criatura") return false;
+  if (tieneKeyword(def, "rapidez")) return false;
+
+  return instancia.turnoEnCampo === state.turno;
 }
 
 /** Ataque/vida actuales de una criatura (base + buffs, y en el caso de vida, menos el daño
@@ -261,6 +280,19 @@ function puedeBloquear(state: GameState, instanceId: string): boolean {
   if (tieneEquipoQueImpideAtacar(state, instancia)) return false; // Soga: "no puede atacar o bloquear"
 
   return true;
+}
+
+/** ¿Tiene sentido siquiera preguntarle al defensor si quiere bloquear? No, si no le queda
+ *  ninguna criatura habilitada para bloquear, o si todos los atacantes son "no puede ser
+ *  bloqueado" (Topo). En esos casos el combate se resuelve directo, sin pausar. */
+function hayBloqueoPosible(state: GameState, atacantes: string[], defensor: PlayerId): boolean {
+  const hayBloqueadorDisponible = state[defensor].campo.some((id) => puedeBloquear(state, id));
+  if (!hayBloqueadorDisponible) return false;
+
+  return atacantes.some((atacanteId) => {
+    const def = getDefinition(state.cartas[atacanteId].defId);
+    return !(def.categoria === "criatura" && def.noPuedeSerBloqueado);
+  });
 }
 
 /**
@@ -325,9 +357,7 @@ function alternarAtacante(state: GameState, instanceId: string): GameState {
 /**
  * Aplica el daño de un combate ya resuelto (atacantes + bloqueos definidos) y revisa
  * muertes de ambos lados. Único punto donde se calcula daño de combate, lo use quien lo use:
- * la heurística automática o la confirmación manual del jugador. TODO: no implementa el
- * efecto especial de Ignileón (daño extra al ser bloqueado) — eso necesita un sistema de
- * efectos por carta que todavía no existe.
+ * la heurística automática o la confirmación manual del jugador.
  */
 function resolverCombate(
   state: GameState,
@@ -359,6 +389,15 @@ function resolverCombate(
       ...cartasActualizadas[atacanteId],
       danio: cartasActualizadas[atacanteId].danio + ataqueBloqueador,
     };
+
+    // Arrasar: el excedente de ataque por sobre la vida de la bloqueadora (al momento de
+    // bloquear, antes de aplicarle este mismo daño) pasa directo al jugador defensor.
+    const defAtacante = getDefinition(state.cartas[atacanteId].defId);
+    if (defAtacante.categoria === "criatura" && tieneKeyword(defAtacante, "arrasar")) {
+      const vidaBloqueadorAlBloquear = vidaActualDe(state, bloqueadorId);
+      const excedente = ataqueAtacante - vidaBloqueadorAlBloquear;
+      if (excedente > 0) danioDirectoAlRival += excedente;
+    }
   }
 
   let estadoResuelto: GameState = {
@@ -399,6 +438,9 @@ function confirmarAtaque(state: GameState): GameState {
   };
 
   if (rival === "player") {
+    if (!hayBloqueoPosible(estadoConAtaqueDeclarado, atacantes, rival)) {
+      return resolverCombate(estadoConAtaqueDeclarado, rival, atacantes, {});
+    }
     return { ...estadoConAtaqueDeclarado, combateEnCurso: { atacantes, bloqueos: {} } };
   }
 
@@ -473,6 +515,77 @@ function coincideFusion(fusion: FusionDefinition, defA: CreatureDefinition, defB
  *  (ej. una exacta y una por tipo); eso se resuelve al azar más abajo. */
 function buscarFusionesPosibles(defA: CreatureDefinition, defB: CreatureDefinition): FusionDefinition[] {
   return fusionDefinitions.filter((fusion) => coincideFusion(fusion, defA, defB));
+}
+
+/** Todas las criaturas propias disponibles para invocar o fusionar (mano + campo). */
+function criaturasDisponiblesDe(
+  state: GameState,
+  jugador: PlayerId
+): { instanceId: string; def: CreatureDefinition }[] {
+  const resultado: { instanceId: string; def: CreatureDefinition }[] = [];
+
+  for (const instanceId of [...state[jugador].mano, ...state[jugador].campo]) {
+    const def = getDefinition(state.cartas[instanceId].defId);
+    if (def.categoria === "criatura") resultado.push({ instanceId, def });
+  }
+
+  return resultado;
+}
+
+function hayInvocacionPosible(state: GameState, jugador: PlayerId): boolean {
+  if (state.invocoCriaturaEsteTurno) return false;
+
+  return state[jugador].mano.some((id) => getDefinition(state.cartas[id].defId).categoria === "criatura");
+}
+
+/** ¿Hay al menos un par de criaturas propias (mano/campo, cualquier combinación) que
+ *  dispare alguna fusión? */
+function hayFusionPosible(state: GameState, jugador: PlayerId): boolean {
+  if (state.fusionoEsteTurno) return false;
+
+  const criaturas = criaturasDisponiblesDe(state, jugador);
+
+  for (let i = 0; i < criaturas.length; i++) {
+    for (let j = i + 1; j < criaturas.length; j++) {
+      if (buscarFusionesPosibles(criaturas[i].def, criaturas[j].def).length > 0) return true;
+    }
+  }
+
+  return false;
+}
+
+/** ¿Esta criatura puntual (mano o campo) tiene con qué fusionarse ahora mismo? Se usa para
+ *  el brillo dorado en la carta, no solo para saber si "hay alguna fusión en general". */
+export function tieneFusionDisponible(state: GameState, jugador: PlayerId, instanceId: string): boolean {
+  if (state.fusionoEsteTurno) return false;
+  if (!FASES_DE_ACCION.includes(state.fase)) return false;
+
+  const defPropia = getDefinition(state.cartas[instanceId].defId);
+  if (defPropia.categoria !== "criatura") return false;
+
+  return criaturasDisponiblesDe(state, jugador).some(
+    ({ instanceId: otroId, def }) => otroId !== instanceId && buscarFusionesPosibles(defPropia, def).length > 0
+  );
+}
+
+function hayMagiaOEquipoJugable(state: GameState, jugador: PlayerId): boolean {
+  const hayObjetivoEnJuego = state.player.campo.length > 0 || state.enemy.campo.length > 0;
+  if (!hayObjetivoEnJuego) return false;
+
+  return state[jugador].mano.some((id) => {
+    const categoria = getDefinition(state.cartas[id].defId).categoria;
+    return categoria === "magia" || categoria === "equipo";
+  });
+}
+
+/** ¿Hay alguna acción posible en fase principal/secundaria? Invocar, fusionar, o jugar
+ *  alguna magia/equipo. Si no hay nada de esto, la fase avanza sola (ver `useGame`). */
+export function hayAccionPrincipalPosible(state: GameState, jugador: PlayerId): boolean {
+  return (
+    hayInvocacionPosible(state, jugador) ||
+    hayFusionPosible(state, jugador) ||
+    hayMagiaOEquipoJugable(state, jugador)
+  );
 }
 
 /** Reparte probabilidad según `peso` (default 1 = todas iguales) y elige una al azar. */
@@ -550,7 +663,7 @@ function propietarioDe(state: GameState, instanceId: string): PlayerId {
   return state.player.campo.includes(instanceId) ? "player" : "enemy";
 }
 
-/** Vitaminas: +1/+1 permanente sobre la instancia objetivo. */
+/** Vitaminas: +2/+2 permanente sobre la instancia objetivo. */
 function aplicarVitaminas(state: GameState, objetivoId: string): GameState {
   const instancia = state.cartas[objetivoId];
 
@@ -558,7 +671,7 @@ function aplicarVitaminas(state: GameState, objetivoId: string): GameState {
     ...state,
     cartas: {
       ...state.cartas,
-      [objetivoId]: { ...instancia, buffs: [...instancia.buffs, { ataque: 1, vida: 1 }] },
+      [objetivoId]: { ...instancia, buffs: [...instancia.buffs, { ataque: 2, vida: 2 }] },
     },
   };
 }
@@ -749,7 +862,8 @@ export function useGame() {
       game.fase === "inicio" ||
       game.fase === "robo" ||
       game.fase === "fin" ||
-      (game.fase === "pelea" && !hayAtacantesDisponibles(game, "player"));
+      (game.fase === "pelea" && !hayAtacantesDisponibles(game, "player")) ||
+      ((game.fase === "principal" || game.fase === "secundaria") && !hayAccionPrincipalPosible(game, "player"));
 
     if (!faseSinAccionPosible) return;
 

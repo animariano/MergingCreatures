@@ -2,7 +2,7 @@ import { useState } from "react";
 
 import "./Board.css";
 import Card from "../Card/Card";
-import { useGame, hayAtacantesDisponibles } from "../../hooks/useGame";
+import { useGame, hayAtacantesDisponibles, hayAccionPrincipalPosible, tieneMalDeInvocacion, tieneFusionDisponible } from "../../hooks/useGame";
 import { getDefinition } from "../../data/cards";
 import type { Fase } from "../../types/GameState";
 
@@ -35,8 +35,7 @@ function Board() {
   // acción posible, no tiene sentido mostrar el botón para avanzarla a mano — va a
   // avanzar sola en un instante.
   const faseTieneAccionManual =
-    game.fase === "principal" ||
-    game.fase === "secundaria" ||
+    (FASES_DE_ACCION.includes(game.fase) && hayAccionPrincipalPosible(game, "player")) ||
     (game.fase === "pelea" && hayAtacantesDisponibles(game, "player"));
 
   function cancelarSelecciones() {
@@ -166,6 +165,7 @@ function Board() {
                   key={instanceId}
                   instance={game.cartas[instanceId]}
                   seleccionada={atacanteParaBloquear === instanceId || tieneBloqueadorAsignado}
+                  mareada={tieneMalDeInvocacion(game, instanceId)}
                   onMouseEnter={() => setCartaEnHover(instanceId)}
                   onMouseLeave={() => setCartaEnHover(null)}
                   onClick={
@@ -195,6 +195,8 @@ function Board() {
                   game.atacantesDeclarados.includes(instanceId) ||
                   esBloqueadoraAsignada
                 }
+                mareada={tieneMalDeInvocacion(game, instanceId)}
+                fusionDisponible={tieneFusionDisponible(game, "player", instanceId)}
                 onMouseEnter={() => setCartaEnHover(instanceId)}
                 onMouseLeave={() => setCartaEnHover(null)}
                 onClick={
@@ -217,6 +219,7 @@ function Board() {
               seleccionada={
                 cartaFusionSeleccionada === instanceId || cartaMagicaSeleccionada === instanceId
               }
+              fusionDisponible={tieneFusionDisponible(game, "player", instanceId)}
               onMouseEnter={() => setCartaEnHover(instanceId)}
               onMouseLeave={() => setCartaEnHover(null)}
               onClick={() => manejarClickCartaEnMano(instanceId)}
